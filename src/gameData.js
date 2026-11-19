@@ -216,30 +216,12 @@ export const itemTypes = {
   ]
 };
 
-// Function to generate random integer
-const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-
-// Function for weighted random choice (for array of {name, weight} objects)
-const weightedRandom = (options) => {
-  if (options.length === 0) return null;
-  const totalWeight = options.reduce((sum, item) => sum + item.weight, 0);
-  let randomNum = Math.random() * totalWeight;
-
-  for (const item of options) {
-    if (randomNum < item.weight) {
-      return item.name;
-    }
-    randomNum -= item.weight;
-  }
-  return options[0].name; // Fallback
-};
-
 // Quest Definitions
 export const questTemplates = [
   {
     type: "Battle Quest",
     name: "Orc Scourge",
-    description: "Win {num} fights against Orcs in the Dark Forest.",
+    description: "Win {winsRequired} fights against Orcs in the Dark Forest.",
     rankRequired: "F",
     rewards: { xp: 50, numItems: 1, itemRarity: "Common" },
     specifics: { enemyType: "Orcs", winsRequired: 3, location: "Dark Forest" },
@@ -248,7 +230,7 @@ export const questTemplates = [
   {
     type: "Battle Quest",
     name: "Goblin Menace",
-    description: "Defeat {num} Goblin patrols in the Whispering Caves.",
+    description: "Defeat {winsRequired} Goblin patrols in the Whispering Caves.",
     rankRequired: "F",
     rewards: { xp: 40, numItems: 1, itemRarity: "Uncommon" },
     specifics: { enemyType: "Goblins", winsRequired: 5, location: "Whispering Caves" },
@@ -257,7 +239,7 @@ export const questTemplates = [
   {
     type: "Exploration Quest",
     name: "Wastelands Survival",
-    description: "Survive {num} rounds in the Wastelands Arena.",
+    description: "Survive {roundsToSurvive} rounds in the Wastelands Arena.",
     rankRequired: "E",
     rewards: { xp: 75, numItems: 1, itemRarity: "Rare" },
     specifics: { roundsToSurvive: 5, location: "Wastelands Arena" },
@@ -266,7 +248,7 @@ export const questTemplates = [
   {
     type: "Stat Training",
     name: "Master Your Speed",
-    description: "Train your Speed. Costs {cost} Gold to gain +{statGain} Speed. (Max 90)",
+    description: "Train your Speed to gain +{statGain} Speed (max 90).",
     rankRequired: "D",
     rewards: { stat: "Speed", value: 2 },
     costs: { gold: 50 },
@@ -275,7 +257,7 @@ export const questTemplates = [
   {
     type: "Ability Trials",
     name: "Arcane Mastery",
-    description: "Win {num} battles using only abilities (no basic attacks).",
+    description: "Win {winsRequired} battles using only abilities (no basic attacks).",
     rankRequired: "C",
     rewards: { xp: 120, newAbility: "Random" },
     specifics: { winsRequired: 3, abilityOnly: true },
@@ -284,7 +266,7 @@ export const questTemplates = [
   {
     type: "Flaw Redemption",
     name: "Conquer Your Fear",
-    description: "Win {num} battles while having the '{flaw}' flaw.",
+    description: "Win {winsRequired} battles while having the '{flawToRedeem}' flaw.",
     rankRequired: "B",
     rewards: { xp: 150, removesFlaw: true },
     specifics: { winsRequired: 3, flawToRedeem: "Fear of Water" },

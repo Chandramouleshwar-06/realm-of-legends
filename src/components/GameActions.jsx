@@ -25,11 +25,11 @@ const GameActions = ({ generateQuests, startMockCombat, setShowInventoryModal })
           
           <div className="relative z-10 text-center">
             <div className="flex items-center justify-center gap-4 mb-8">
-              <div className="w-16 h-16 bg-gradient-to-br from-blue-400 to-cyan-500 rounded-full flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
+              <div className="w-16 h-16 bg-gradient-to-br from-blue-400 to-cyan-500 rounded-full flex shrink-0 items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
                 <ScrollText size={32} className="text-white" />
               </div>
               <h4 className="text-3xl font-bold text-blue-400 font-fantasy">Sacred Quests</h4>
-              <div className="w-16 h-16 bg-gradient-to-br from-cyan-400 to-blue-500 rounded-full flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
+              <div className="w-16 h-16 bg-gradient-to-br from-cyan-400 to-blue-500 rounded-full flex shrink-0 items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
                 <Feather size={32} className="text-white animate-pulse" />
               </div>
             </div>
@@ -61,11 +61,11 @@ const GameActions = ({ generateQuests, startMockCombat, setShowInventoryModal })
           
           <div className="relative z-10 text-center">
             <div className="flex items-center justify-center gap-4 mb-8">
-              <div className="w-16 h-16 bg-gradient-to-br from-red-400 to-orange-500 rounded-full flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
+              <div className="w-16 h-16 bg-gradient-to-br from-red-400 to-orange-500 rounded-full flex shrink-0 items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
                 <Sword size={32} className="text-white" />
               </div>
               <h4 className="text-3xl font-bold text-red-400 font-fantasy">Combat Arena</h4>
-              <div className="w-16 h-16 bg-gradient-to-br from-orange-400 to-red-500 rounded-full flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
+              <div className="w-16 h-16 bg-gradient-to-br from-orange-400 to-red-500 rounded-full flex shrink-0 items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
                 <Shield size={32} className="text-white animate-pulse" />
               </div>
             </div>
@@ -98,11 +98,11 @@ const GameActions = ({ generateQuests, startMockCombat, setShowInventoryModal })
         
         <div className="relative z-10 text-center">
           <div className="flex items-center justify-center gap-4 mb-8">
-            <div className="w-16 h-16 bg-gradient-to-br from-purple-400 to-pink-500 rounded-full flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
+            <div className="w-16 h-16 bg-gradient-to-br from-purple-400 to-pink-500 rounded-full flex shrink-0 items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
               <Briefcase size={32} className="text-white" />
             </div>
             <h4 className="text-3xl font-bold text-purple-400 font-fantasy">Treasure Vault</h4>
-            <div className="w-16 h-16 bg-gradient-to-br from-pink-400 to-purple-500 rounded-full flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
+            <div className="w-16 h-16 bg-gradient-to-br from-pink-400 to-purple-500 rounded-full flex shrink-0 items-center justify-center shadow-xl group-hover:scale-110 transition-transform duration-300">
               <Gem size={32} className="text-white animate-pulse" />
             </div>
           </div>

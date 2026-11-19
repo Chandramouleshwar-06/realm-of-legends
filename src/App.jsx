@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, collection, query, getDocs } from 'firebase/firestore';
+import { createPortal } from 'react-dom';
 import { Sparkles, BookOpen, Crown, Sword, Shield, Zap } from 'lucide-react';
 
 // Import game data and helper functions
@@ -20,32 +18,8 @@ import RankingsModal from './components/RankingsModal.jsx';
 import QuestsModal from './components/QuestsModal.jsx';
 import InventoryModal from './components/InventoryModal.jsx';
 import CombatArena from './components/CombatArena.jsx';
+import * as storage from './services/storage.js';
 
-// Firebase configuration
-let firebaseConfig;
-if (typeof __firebase_config !== 'undefined') {
-  firebaseConfig = JSON.parse(__firebase_config);
-} else {
-  firebaseConfig = {
-    apiKey: "AIzaSyDtWmN_s0IuXaYd1gEDiYFvkx4s6VYPq20",
-    authDomain: "fantasyrpg-03.firebaseapp.com",
-    projectId: "fantasyrpg-03",
-    storageBucket: "fantasyrpg-03.firebasestorage.app",
-    messagingSenderId: "270407019620",
-    appId: "1:270407019620:web:68ebdc1c0fa99fdb6bc371",
-    measurementId: "G-GPEJ7SH66S"
-  };
-}
-
-// Use the projectId from firebaseConfig instead of a potentially undefined variable
-const appId = firebaseConfig.projectId;
-
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const auth = getAuth(app);
 
 const App = () => {
   // State definitions
@@ -67,34 +41,17 @@ const App = () => {
   
   const spinLabelRef = useRef(null);
 
-  // Firebase Auth and Character Loading
+  // Connect to storage (Firebase if configured, otherwise this browser)
   useEffect(() => {
-    const signInUser = async () => {
-      try {
-        if (initialAuthToken) {
-          await signInWithCustomToken(auth, initialAuthToken);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (error) {
-        console.error("Firebase authentication error:", error);
-        showCustomModal("Authentication Failed!", error.message || "Could not connect to Firebase Authentication.", "error");
-      }
-    };
-
-    signInUser();
-
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        setUserId(user.uid);
-        setIsAuthReady(true);
-      } else {
-        setUserId(null);
-        setIsAuthReady(true);
-      }
-    });
-
-    return () => unsubscribe();
+    let cancelled = false;
+    storage.connect()
+      .then(id => { if (!cancelled) setUserId(id); })
+      .catch(error => {
+        console.error('Storage connection error:', error);
+        showCustomModal('Connection Failed', 'Could not connect to the save service. Progress will not be saved.', 'error');
+      })
+      .finally(() => { if (!cancelled) setIsAuthReady(true); });
+    return () => { cancelled = true; };
   }, []);
 
   // Load character when auth is ready
@@ -102,10 +59,8 @@ const App = () => {
     const loadCharacter = async () => {
       if (userId && isAuthReady) {
         try {
-          const charDocRef = doc(db, `artifacts/${appId}/users/${userId}/characters`, 'mainCharacter');
-          const docSnap = await getDoc(charDocRef);
-          if (docSnap.exists()) {
-            const loadedChar = docSnap.data();
+          const loadedChar = await storage.loadCharacter(userId);
+          if (loadedChar) {
             setCharacter(loadedChar);
             setCharacterName(loadedChar.name || '');
             setInstruction(`Welcome back, ${loadedChar.name || 'Hero'}! Your legend continues...`);
@@ -128,7 +83,7 @@ const App = () => {
   // Custom modal function
   const showCustomModal = (title, message, type = "info") => {
     const modal = document.createElement('div');
-    modal.className = 'fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50 p-4 backdrop-blur-sm';
+    modal.className = 'fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4 backdrop-blur-sm';
     const borderColor = type === "error" ? "border-red-500" : type === "success" ? "border-emerald-500" : "border-amber-500";
     const titleColor = type === "error" ? "text-red-400" : type === "success" ? "text-emerald-400" : "text-amber-400";
     const bgGradient = type === "error" ? "from-red-900/20 to-red-800/20" : type === "success" ? "from-emerald-900/20 to-emerald-800/20" : "from-amber-900/20 to-amber-800/20";
@@ -157,9 +112,7 @@ const App = () => {
       return;
     }
     try {
-      const charDocRef = doc(db, `artifacts/${appId}/users/${userId}/characters`, 'mainCharacter');
-      await setDoc(charDocRef, charData);
-      console.log("Character saved successfully!");
+      await storage.saveCharacter(userId, charData);
     } catch (e) {
       console.error("Error saving character:", e);
       showCustomModal("Save Error", "Error saving character. Please try again.", "error");
@@ -228,7 +181,7 @@ const App = () => {
   const gainXP = useCallback((amount) => {
     if (!character) return;
     setCharacter(prevChar => {
-      let newXP = prevChar.XP + amount;
+      let newXP = Math.max(0, prevChar.XP + amount);
       let newLevel = prevChar.Level;
 
       const nextLevelXP = levelUpThresholds[newLevel];
@@ -244,37 +197,7 @@ const App = () => {
     });
   }, [character, saveCharacter]);
 
-  const applyStatGain = useCallback((statName, value) => {
-    if (!character) return;
-    setCharacter(prevChar => {
-      const newStats = { ...prevChar.Stats };
-      let floatingPointsGained = 0;
-
-      const currentStat = newStats[statName] || 0;
-      let finalStatValue = currentStat + value;
-
-      if (finalStatValue > 90) {
-        floatingPointsGained = finalStatValue - 90;
-        finalStatValue = 90;
-        showCustomModal("Stat Cap Reached!", `Your ${statName} reached 90! You gained ${floatingPointsGained} floating stat points.`, "success");
-      } else {
-        showCustomModal("Stat Increased!", `Your ${statName} increased to ${finalStatValue}!`, "success");
-      }
-
-      newStats[statName] = finalStatValue;
-
-      const updatedChar = {
-        ...prevChar,
-        Stats: newStats,
-        floatingStatPoints: (prevChar.floatingStatPoints || 0) + floatingPointsGained
-      };
-      const finalChar = calculateNexusRating(updatedChar);
-      saveCharacter(finalChar);
-      return finalChar;
-    });
-  }, [character, saveCharacter, calculateNexusRating]);
-
-  const addItemToInventory = useCallback((itemToAdd) => {
+  const addItemToInventory = useCallback((itemToAdd, { silent = false } = {}) => {
     if (!character) return;
     setCharacter(prevChar => {
       const newInventory = [...(prevChar.inventory || [])];
@@ -302,7 +225,7 @@ const App = () => {
 
       const updatedChar = { ...prevChar, inventory: newInventory };
       saveCharacter(updatedChar);
-      showCustomModal("New Item!", `You received: ${itemToAdd.name}${itemToAdd.quantity > 1 && itemToAdd.stackable ? ` (x${itemToAdd.quantity})` : ''}!`, "success");
+      if (!silent) showCustomModal("New Item!", `You received: ${itemToAdd.name}${itemToAdd.quantity > 1 && itemToAdd.stackable ? ` (x${itemToAdd.quantity})` : ''}!`, "success");
       return updatedChar;
     });
   }, [character, saveCharacter]);
@@ -338,14 +261,14 @@ const App = () => {
     return rewards;
   }, []);
 
-  const generateAIOpponent = useCallback((playerRank) => {
+  const generateAIOpponent = useCallback((playerRank, forcedRace = null) => {
     const aiChar = {};
     const playerRatingThreshold = nexusRankThresholds[playerRank];
     const difficultyOffset = randomInt(-10, 5);
     const aiTargetRating = Math.max(0, Math.min(100, playerRatingThreshold + difficultyOffset));
 
     const eligibleAIRaces = races.filter(r => Math.abs(r.rarity - aiTargetRating) < 25);
-    aiChar.Race = weightedRandom(eligibleAIRaces.length > 0 ? eligibleAIRaces : races);
+    aiChar.Race = forcedRace || weightedRandom(eligibleAIRaces.length > 0 ? eligibleAIRaces : races);
 
     const aiAbilityOptions = abilities[aiChar.Race] || ["No Ability"];
     aiChar.Ability = aiAbilityOptions[randomInt(0, aiAbilityOptions.length - 1)];
@@ -414,43 +337,13 @@ const App = () => {
       return;
     }
 
-    const charRank = character["Nexus Rank"];
     const charRating = character["Nexus Rating"];
-    const currentRankThreshold = nexusRankThresholds[charRank];
-
-    const sortedRanks = Object.entries(nexusRankThresholds).sort(([, a], [, b]) => a - b);
-    let nextRank = null;
-    let nextRankThreshold = null;
-    let foundCurrent = false;
-    for (const [rankName, threshold] of sortedRanks) {
-        if (foundCurrent && threshold > currentRankThreshold) {
-            nextRank = rankName;
-            nextRankThreshold = threshold;
-            break;
-        }
-        if (rankName === charRank) {
-            foundCurrent = true;
-        }
-    }
-
     const quests = [];
 
-    if (nextRank && charRating >= nextRankThreshold) {
-      quests.push({
-        id: "rank_up_quest",
-        type: "Rank Up Quest",
-        name: `Ascension Trial: Rise to ${nextRank}`,
-        description: `Complete a legendary challenge to ascend to Nexus Rank ${nextRank}!`,
-        rankRequired: charRank,
-        rewards: { rank: nextRank, xp: 200 },
-        specifics: { type: "rank_up", targetRank: nextRank }
-      });
-    }
-
-    const eligibleQuests = questTemplates.filter(q => {
-        const questRankThreshold = nexusRankThresholds[q.rankRequired];
-        return charRating >= questRankThreshold;
-    });
+    // Only Battle Quests have progress tracking; the other templates are not playable yet.
+    const eligibleQuests = questTemplates.filter(q =>
+      q.type === "Battle Quest" && charRating >= nexusRankThresholds[q.rankRequired]
+    );
 
     while (quests.length < 3 && eligibleQuests.length > 0) {
       const randomIndex = randomInt(0, eligibleQuests.length - 1);
@@ -468,7 +361,7 @@ const App = () => {
         let costDescription = Object.entries(chosenQuest.costs).map(([resource, val]) => `${val} ${resource}`).join(', ');
         description += ` (Cost: ${costDescription})`;
       }
-      quests.push({ ...chosenQuest, description });
+      quests.push({ ...chosenQuest, id: chosenQuest.name, description, progress: { ...chosenQuest.progress } });
     }
 
     setAvailableQuests(quests);
@@ -577,14 +470,7 @@ const App = () => {
       return;
     }
     try {
-      const charactersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/characters`);
-      const q = query(charactersCollectionRef);
-      const querySnapshot = await getDocs(q);
-
-      const rankings = [];
-      querySnapshot.forEach((doc) => {
-        rankings.push(doc.data());
-      });
+      const rankings = await storage.listCharacters(userId);
 
       rankings.sort((a, b) => (b["Nexus Rating"] || 0) - (a["Nexus Rating"] || 0));
       setAllRankings(rankings);
@@ -594,7 +480,7 @@ const App = () => {
       console.error("Error fetching rankings:", e);
       showCustomModal("Error Fetching Rankings", "Error fetching rankings.", "error");
     }
-  }, [userId, isAuthReady, appId, db]);
+  }, [userId, isAuthReady]);
 
   const closeRankingsModal = () => { setShowRankingsModal(false); };
   const closeQuestsModal = () => { setShowQuestsModal(false); };
@@ -605,58 +491,72 @@ const App = () => {
   };
 
   const updateQuestProgress = useCallback((questId, progressType, value) => {
-    setCharacter(prevChar => {
-      if (!prevChar || !prevChar.activeQuest || prevChar.activeQuest.id !== questId) {
-        return prevChar;
-      }
+    if (!activeQuest || activeQuest.id !== questId || progressType !== 'wins') return;
 
-      const updatedProgress = { ...prevChar.activeQuest.currentProgress };
-      if (progressType === "wins") {
-        updatedProgress.currentWins = (updatedProgress.currentWins || 0) + value;
-        if (prevChar.activeQuest.type === "Battle Quest" && updatedProgress.currentWins >= prevChar.activeQuest.specifics.winsRequired) {
-          showCustomModal("Quest Complete!", `Quest "${prevChar.activeQuest.name}" completed!`, "success");
-          const rewards = prevChar.activeQuest.rewards;
-          if (rewards.xp) gainXP(rewards.xp);
-          if (rewards.item) addItemToInventory(rewards.item);
+    const currentWins = (activeQuest.currentProgress?.currentWins || 0) + value;
+    const winsRequired = activeQuest.specifics?.winsRequired || 1;
 
-          return { ...prevChar, activeQuest: null };
+    if (activeQuest.type === 'Battle Quest' && currentWins >= winsRequired) {
+      setActiveQuest(null);
+      setCharacter(prevChar => {
+        const updatedChar = { ...prevChar, activeQuest: null };
+        saveCharacter(updatedChar);
+        return updatedChar;
+      });
+      showCustomModal('Quest Complete!', `Quest "${activeQuest.name}" completed!`, 'success');
+      const rewards = activeQuest.rewards || {};
+      if (rewards.xp) gainXP(rewards.xp);
+      if (rewards.item) addItemToInventory(rewards.item);
+      if (rewards.numItems) {
+        const pool = Object.values(itemTypes).flat().filter(item => !rewards.itemRarity || item.rarity === rewards.itemRarity);
+        for (let i = 0; i < rewards.numItems && pool.length; i++) {
+          addItemToInventory(pool[randomInt(0, pool.length - 1)]);
         }
       }
+      return;
+    }
 
-      const updatedActiveQuest = { ...prevChar.activeQuest, currentProgress: updatedProgress };
-      saveCharacter({ ...prevChar, activeQuest: updatedActiveQuest });
-      return { ...prevChar, activeQuest: updatedActiveQuest };
+    const updatedQuest = { ...activeQuest, currentProgress: { ...activeQuest.currentProgress, currentWins } };
+    setActiveQuest(updatedQuest);
+    setCharacter(prevChar => {
+      const updatedChar = { ...prevChar, activeQuest: updatedQuest };
+      saveCharacter(updatedChar);
+      return updatedChar;
     });
-  }, [character, gainXP, addItemToInventory, saveCharacter]);
+    showCustomModal('Quest Progress', `${updatedQuest.name}: ${currentWins}/${winsRequired} victories.`, 'info');
+  }, [activeQuest, gainXP, addItemToInventory, saveCharacter]);
 
   const startMockCombat = useCallback(() => {
     if (!character) {
       showCustomModal("No Character!", "Please generate a character first!", "error");
       return;
     }
-    const opponent = generateAIOpponent(character["Nexus Rank"]);
+    // During a battle quest the arena sends the enemy type the quest asks for.
+    const questEnemy = activeQuest?.type === "Battle Quest" ? activeQuest.specifics?.enemyType : null;
+    const opponent = generateAIOpponent(character["Nexus Rank"], questEnemy);
     const playerWithHP = { ...character, currentHP: calculateMaxHP(character.Stats?.Durability || 0), maxHP: calculateMaxHP(character.Stats?.Durability || 0) };
 
     setCombatants({ player: playerWithHP, opponent: opponent });
     setShowCombatModal(true);
-  }, [character, generateAIOpponent, calculateMaxHP]);
+  }, [character, activeQuest, generateAIOpponent, calculateMaxHP]);
 
-  const handleCombatEnd = useCallback((winner, winningChar) => {
+  const handleCombatEnd = useCallback((winner, enemy) => {
     let message = "";
     if (winner === 'player') {
-      message = `Victory! You defeated ${winningChar.name}!`;
+      message = `Victory! You defeated ${enemy.name}!`;
       const xpReward = randomInt(character.Level * 10, character.Level * 20);
       gainXP(xpReward);
       const rewards = generateWeightedRewards(character.Level, randomInt(1, 4));
-      rewards.forEach(item => addItemToInventory(item));
-      message += ` You gained ${xpReward} XP and some loot!`;
+      rewards.forEach(item => addItemToInventory(item, { silent: true }));
+      message += ` You gained ${xpReward} XP.`;
+      if (rewards.length) message += ` Loot: ${rewards.map(item => item.name).join(', ')}.`;
 
-      if (activeQuest && activeQuest.type === "Battle Quest" && activeQuest.specifics.enemyType === winningChar.Race) {
+      if (activeQuest && activeQuest.type === "Battle Quest" && activeQuest.specifics?.enemyType === enemy.Race) {
         updateQuestProgress(activeQuest.id, "wins", 1);
       }
 
     } else {
-      message = `Defeat! You were knocked out by ${winningChar.name}.`;
+      message = `Defeat! You were knocked out by ${enemy.name}.`;
       const penaltyXP = Math.round((randomInt(character.Level * 10, character.Level * 20)) / 4);
       gainXP(-penaltyXP);
       message += ` You lost ${penaltyXP} XP.`;
@@ -694,13 +594,13 @@ const App = () => {
             {/* Header */}
             <div className="text-center mb-12">
               <div className="flex items-center justify-center gap-4 mb-6">
-                <div className="w-16 h-16 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full flex items-center justify-center shadow-lg">
+                <div className="hidden sm:flex shrink-0 w-16 h-16 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full items-center justify-center shadow-lg">
                   <Crown size={32} className="text-white" />
                 </div>
-                <h1 className="text-6xl lg:text-7xl font-extrabold text-transparent bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 bg-clip-text drop-shadow-2xl font-fantasy animate-glow">
+                <h1 className="text-4xl sm:text-6xl lg:text-7xl font-extrabold text-transparent bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 bg-clip-text drop-shadow-2xl font-fantasy animate-glow">
                   Realm of Legends
                 </h1>
-                <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-purple-700 rounded-full flex items-center justify-center shadow-lg">
+                <div className="hidden sm:flex shrink-0 w-16 h-16 bg-gradient-to-br from-purple-500 to-purple-700 rounded-full items-center justify-center shadow-lg">
                   <Sparkles size={32} className="text-white animate-spin-slow" />
                 </div>
               </div>
@@ -713,7 +613,7 @@ const App = () => {
             {/* Character Name Input */}
             <div className="flex flex-col lg:flex-row items-center justify-center gap-6 mb-12">
               <label htmlFor="characterName" className="text-2xl font-bold text-amber-400 font-serif flex items-center gap-3">
-                <div className="w-10 h-10 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full flex items-center justify-center">
+                <div className="w-10 h-10 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full flex shrink-0 items-center justify-center">
                   <Crown size={20} className="text-white" />
                 </div>
                 Hero's Name:
@@ -747,11 +647,11 @@ const App = () => {
               <div className="mt-8">
                 <div className="text-center mb-12">
                   <div className="flex items-center justify-center gap-4 mb-6">
-                    <Sparkles size={48} className="text-amber-400 animate-pulse" />
-                    <h2 className="text-5xl lg:text-6xl font-bold text-transparent bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 bg-clip-text font-fantasy">
+                    <Sparkles size={48} className="hidden sm:block text-amber-400 animate-pulse" />
+                    <h2 className="text-3xl sm:text-5xl lg:text-6xl font-bold text-transparent bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 bg-clip-text font-fantasy">
                       Your Legend Awakens!
                     </h2>
-                    <Sparkles size={48} className="text-purple-400 animate-pulse" style={{animationDelay: '1s'}} />
+                    <Sparkles size={48} className="hidden sm:block text-purple-400 animate-pulse" style={{animationDelay: '1s'}} />
                   </div>
                   <div className="w-48 h-1 bg-gradient-to-r from-transparent via-amber-400 to-transparent mx-auto"></div>
                 </div>
@@ -813,16 +713,8 @@ const App = () => {
                           XP gain & leveling system
                         </li>
                         <li className="flex items-center gap-2">
-                          <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
-                          Floating stat points (90+ cap)
-                        </li>
-                        <li className="flex items-center gap-2">
                           <div className="w-2 h-2 bg-purple-400 rounded-full"></div>
                           Quest system with rewards
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <div className="w-2 h-2 bg-pink-400 rounded-full"></div>
-                          Rank progression trials
                         </li>
                         <li className="flex items-center gap-2">
                           <div className="w-2 h-2 bg-cyan-400 rounded-full"></div>
@@ -850,13 +742,12 @@ const App = () => {
               </button>
             </div>
             
-            <div className="text-center mt-8">
-              <p className="text-sm text-slate-400 font-serif">
-                Your unique realm ID: <span className="text-amber-400 font-mono">{userId || 'Connecting to the mystical realm...'}</span>
-              </p>
-            </div>
           </div>
 
+        </div>
+      </div>
+      {/* Modals render on <body> so the card's backdrop blur cannot clip them */}
+      {createPortal(<>
           {/* Modals */}
           <RankingsModal
             showRankingsModal={showRankingsModal}
@@ -871,6 +762,7 @@ const App = () => {
             onClose={closeQuestsModal}
             acceptQuest={acceptQuest}
             abandonQuest={abandonQuest}
+            onStartBattle={() => { setShowQuestsModal(false); startMockCombat(); }}
           />
 
           <InventoryModal
@@ -885,12 +777,9 @@ const App = () => {
               opponent={combatants.opponent}
               onClose={closeCombatModal}
               onCombatEnd={handleCombatEnd}
-              activeQuest={activeQuest}
-              updateQuestProgress={updateQuestProgress}
             />
           )}
-        </div>
-      </div>
+      </>, document.body)}
     </div>
   );
 };

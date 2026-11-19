@@ -1,153 +1,143 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ChevronRight, Sword, Shield, Zap, Heart, Clock, Star } from 'lucide-react';
-import { fatalFlaws, weaponTypes, weaponMasteryValues, specialAbilities, statNames } from '../gameData.js';
+import { fatalFlaws, weaponTypes, weaponMasteryValues, specialAbilities } from '../gameData.js';
 import { randomInt } from '../utils/helpers.js';
 
-const CombatArena = ({ player, opponent, onClose, onCombatEnd, activeQuest, updateQuestProgress }) => {
-  // Combat state
+const TURN_DELAY_MS = 1200;
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Builds the per-match cooldown / uses tracker for a character's special ability.
+const buildAbilityStates = (character) => {
+  if (character.initialAbilityStates && Object.keys(character.initialAbilityStates).length) {
+    return character.initialAbilityStates;
+  }
+  const ability = specialAbilities.find(sa => sa.name === character["Special Ability"]);
+  if (!ability) return {};
+  return { [ability.name]: { cooldown: 0, usesLeft: ability.usesPerMatch === -1 ? -1 : ability.usesPerMatch } };
+};
+
+// Permanent in-combat penalties coming from a character's fatal flaw.
+const flawPenalties = (character, side) => {
+  const flaw = fatalFlaws.find(f => f.name === character["Fatal Flaw"]);
+  const effect = flaw?.combatEffect;
+  if (!effect?.statPenalty || effect.duration !== -1) return [];
+  return [{ type: "statPenalty", stats: effect.statPenalty, duration: -1, id: `flaw_${side}` }];
+};
+
+const isAbilityReady = (state) => !state || (state.cooldown <= 0 && state.usesLeft !== 0);
+
+const CombatArena = ({ player, opponent, onClose, onCombatEnd }) => {
   const [currentPlayerHP, setCurrentPlayerHP] = useState(player.currentHP);
   const [currentOpponentHP, setCurrentOpponentHP] = useState(opponent.currentHP);
   const [combatTurn, setCombatTurn] = useState(1);
   const [currentAttackerId, setCurrentAttackerId] = useState(null);
-  const [isPlayerTurn, setIsPlayerTurn] = useState(false);
   const [logMessages, setLogMessages] = useState([]);
-  const logRef = useRef(null);
-  const [playerAbilityStates, setPlayerAbilityStates] = useState(player.initialAbilityStates || {});
-  const [opponentAbilityStates, setOpponentAbilityStates] = useState(opponent.initialAbilityStates || {});
-  const [playerBuffsDebuffs, setPlayerBuffsDebuffs] = useState(player.activeBuffs || []);
-  const [opponentBuffsDebuffs, setOpponentBuffsDebuffs] = useState(opponent.activeBuffs || []);
+  const [playerAbilityStates, setPlayerAbilityStates] = useState(() => buildAbilityStates(player));
+  const [opponentAbilityStates, setOpponentAbilityStates] = useState(() => buildAbilityStates(opponent));
+  const [playerBuffsDebuffs, setPlayerBuffsDebuffs] = useState(() => [...(player.activeBuffs || []), ...flawPenalties(player, 'player')]);
+  const [opponentBuffsDebuffs, setOpponentBuffsDebuffs] = useState(() => [...(opponent.activeBuffs || []), ...flawPenalties(opponent, 'opponent')]);
   const [showAbilitySelection, setShowAbilitySelection] = useState(false);
+  const [isResolving, setIsResolving] = useState(false);
+  const [combatOver, setCombatOver] = useState(false);
+
+  const logRef = useRef(null);
+  const resolvingRef = useRef(false);
+  const aiTurnScheduledRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  const isPlayerTurn = currentAttackerId === 'player';
 
   const addLog = useCallback((message) => {
     setLogMessages(prev => [...prev, message]);
   }, []);
 
-  const getEffectiveStats = useCallback((baseStats, buffsDebuffs) => {
+  const getEffectiveStats = useCallback((baseStats = {}, buffsDebuffs = []) => {
     const effectiveStats = { ...baseStats };
     buffsDebuffs.forEach(effect => {
-      if (effect.type === "statPenalty" && effect.stat) {
-        effectiveStats[effect.stat] = Math.max(0, effectiveStats[effect.stat] + effect.value);
-      } else if (effect.type === "statBoost" && effect.stat) {
-        effectiveStats[effect.stat] = effectiveStats[effect.stat] + effect.value;
+      if (effect.type === "statPenalty" && effect.stats) {
+        Object.entries(effect.stats).forEach(([stat, value]) => {
+          effectiveStats[stat] = Math.max(0, (effectiveStats[stat] || 0) + value);
+        });
+      } else if ((effect.type === "statPenalty" || effect.type === "statBoost") && effect.stat) {
+        effectiveStats[effect.stat] = Math.max(0, (effectiveStats[effect.stat] || 0) + effect.value);
       }
     });
     return effectiveStats;
   }, []);
 
-  const calculatePhysicalDamage = useCallback((attacker, defender, attackTypeElement = null) => {
-    const attackerEffectiveStats = getEffectiveStats(attacker.Stats, attacker.activeBuffs);
-    const defenderEffectiveStats = getEffectiveStats(defender.Stats, defender.activeBuffs);
-
-    const attackerStrength = attackerEffectiveStats?.Strength || 0;
-    const attackerWeapon = attacker["Weapon Yes/No"] === "Yes" ? weaponTypes.find(w => w.name === attacker["Weapon Type"]) : null;
-    const attackerMastery = attacker["Weapon Yes/No"] === "Yes" ? weaponMasteryValues[attacker["Weapon Mastery"]] : null;
-
-    let baseDamage = attackerStrength / 5;
-    if (attackerWeapon) {
-      baseDamage += attackerWeapon.baseDamage;
+  // Defending, shields and flaws that modify damage taken.
+  const applyDefenderModifiers = useCallback((damage, defender, defenderStats, attackTypeElement) => {
+    let finalDamage = damage;
+    if (defender.activeBuffs.some(buff => buff.type === 'defending')) {
+      const defenseBonus = (defenderStats.Durability || 0) + (defenderStats.Speed || 0) + (defenderStats.CombatSkill || 0);
+      finalDamage *= (1 - Math.min(0.75, defenseBonus / 400));
+      addLog(`${defender.name} is defending and blunts the blow.`);
     }
-    if (attackerMastery) {
-      baseDamage += attackerMastery.damageBonus;
+    const shield = defender.activeBuffs.find(buff => buff.type === 'damageReduction');
+    if (shield) {
+      finalDamage *= (1 - shield.value);
+      addLog(`${defender.name}'s shield absorbs part of the damage.`);
     }
-
-    const defenderDurability = defenderEffectiveStats?.Durability || 0;
-    const damageReductionFactor = defenderDurability / 200;
-    let finalDamage = baseDamage * (1 - damageReductionFactor);
-
-    const isDefending = defender.activeBuffs.some(buff => buff.type === 'defending');
-    if (isDefending) {
-        const defenseBonus = (defenderEffectiveStats.Durability || 0) + (defenderEffectiveStats.Speed || 0) + (defenderEffectiveStats.CombatSkill || 0);
-        const defendReduction = defenseBonus / 400;
-        finalDamage *= (1 - defendReduction);
-        addLog(`${defender.name} defends, reducing incoming damage!`);
+    const flaw = fatalFlaws.find(f => f.name === defender["Fatal Flaw"]);
+    if (flaw?.combatEffect?.opponentDamageBoost && attackTypeElement && flaw.combatEffect.appliesToType === attackTypeElement) {
+      finalDamage *= (1 + flaw.combatEffect.opponentDamageBoost);
+      addLog(`${defender.name}'s ${flaw.name} makes the ${attackTypeElement} attack hit harder!`);
     }
-
-    const defenderFlawDetails = fatalFlaws.find(f => f.name === defender["Fatal Flaw"]);
-    if (defenderFlawDetails?.combatEffect?.opponentDamageBoost && defenderFlawDetails.combatEffect.appliesToType === attackTypeElement) {
-      finalDamage *= (1 + defenderFlawDetails.combatEffect.opponentDamageBoost);
-      addLog(`${defender.name}'s ${defenderFlawDetails.name} flaw increased incoming ${attackTypeElement} damage!`);
-    }
-
     return Math.max(1, Math.round(finalDamage));
-  }, [weaponTypes, weaponMasteryValues, fatalFlaws, addLog, getEffectiveStats]);
+  }, [addLog]);
 
-  const calculateMagicalDamage = useCallback((attacker, defender, ability, attackTypeElement = null) => {
-    const attackerEffectiveStats = getEffectiveStats(attacker.Stats, attacker.activeBuffs);
-    const defenderEffectiveStats = getEffectiveStats(defender.Stats, defender.activeBuffs);
+  const calculatePhysicalDamage = useCallback((attacker, defender, ability = null) => {
+    const attackerStats = getEffectiveStats(attacker.Stats, attacker.activeBuffs);
+    const defenderStats = getEffectiveStats(defender.Stats, defender.activeBuffs);
 
-    const attackerIntelligence = attackerEffectiveStats?.Intelligence || 0;
-    let baseDamage = attackerIntelligence / 5;
-    if (ability) {
-      baseDamage += ability.power;
+    let baseDamage = (attackerStats.Strength || 0) / 5;
+    if (attacker["Weapon Yes/No"] === "Yes") {
+      baseDamage += weaponTypes.find(w => w.name === attacker["Weapon Type"])?.baseDamage || 0;
+      baseDamage += weaponMasteryValues[attacker["Weapon Mastery"]]?.damageBonus || 0;
     }
+    if (ability?.power > 0) baseDamage += ability.power;
 
-    const defenderDurability = defenderEffectiveStats?.Durability || 0;
-    const damageReductionFactor = defenderDurability / 200;
-    let finalDamage = baseDamage * (1 - damageReductionFactor);
+    const reduced = baseDamage * (1 - (defenderStats.Durability || 0) / 200);
+    return applyDefenderModifiers(reduced, defender, defenderStats, ability?.element || null);
+  }, [getEffectiveStats, applyDefenderModifiers]);
 
-    const isDefending = defender.activeBuffs.some(buff => buff.type === 'defending');
-    if (isDefending) {
-        const defenseBonus = (defenderEffectiveStats.Durability || 0) + (defenderEffectiveStats.Speed || 0) + (defenderEffectiveStats.CombatSkill || 0);
-        const defendReduction = defenseBonus / 400;
-        finalDamage *= (1 - defendReduction);
-        addLog(`${defender.name} defends, reducing incoming damage!`);
-    }
+  const calculateMagicalDamage = useCallback((attacker, defender, ability) => {
+    const attackerStats = getEffectiveStats(attacker.Stats, attacker.activeBuffs);
+    const defenderStats = getEffectiveStats(defender.Stats, defender.activeBuffs);
 
-    const defenderFlawDetails = fatalFlaws.find(f => f.name === defender["Fatal Flaw"]);
-    if (defenderFlawDetails?.combatEffect?.opponentDamageBoost && defenderFlawDetails.combatEffect.appliesToType === attackTypeElement) {
-      finalDamage *= (1 + defenderFlawDetails.combatEffect.opponentDamageBoost);
-      addLog(`${defender.name}'s ${defenderFlawDetails.name} flaw increased incoming ${attackTypeElement} damage!`);
-    }
+    const baseDamage = (attackerStats.Intelligence || 0) / 5 + (ability?.power || 0);
+    const reduced = baseDamage * (1 - (defenderStats.Durability || 0) / 200);
+    return applyDefenderModifiers(reduced, defender, defenderStats, ability?.element || null);
+  }, [getEffectiveStats, applyDefenderModifiers]);
 
-    return Math.max(1, Math.round(finalDamage));
-  }, [fatalFlaws, addLog, getEffectiveStats]);
+  const getDodgeChance = useCallback((attacker, defender) => {
+    const attackerStats = getEffectiveStats(attacker.Stats, attacker.activeBuffs);
+    const defenderStats = getEffectiveStats(defender.Stats, defender.activeBuffs);
+    const agilityBonus = Math.max(0, ((defenderStats.Speed || 0) - (attackerStats.Speed || 0)) / 10);
+    const masteryPenalty = attacker["Weapon Yes/No"] === "Yes" ? (weaponMasteryValues[attacker["Weapon Mastery"]]?.dodgePenalty || 0) : 0;
+    const dodgeBuff = defender.activeBuffs.find(buff => buff.type === 'dodgeBoost');
+    const buffBonus = dodgeBuff ? dodgeBuff.value * 100 : 0;
+    return Math.max(0, Math.min(95, 5 + agilityBonus - masteryPenalty + buffBonus));
+  }, [getEffectiveStats]);
 
-  const getDodgeChance = useCallback((attackerStats, defenderStats, attackerWeaponData) => {
-    const baseDodge = 5;
-
-    const defenderSpeed = defenderStats?.Speed || 0;
-    const attackerSpeed = attackerStats?.Speed || 0;
-    const agilityDifference = defenderSpeed - attackerSpeed;
-    let agilityBonus = Math.max(0, agilityDifference / 10);
-
-    let masteryPenalty = 0;
-    if (attackerWeaponData?.name && attackerWeaponData?.mastery) {
-      masteryPenalty = weaponMasteryValues[attackerWeaponData.mastery]?.dodgePenalty || 0;
-    }
-
-    let finalDodgeChance = baseDodge + agilityBonus - masteryPenalty;
-    return Math.max(0, Math.min(100, finalDodgeChance));
-  }, [weaponMasteryValues]);
-
-  // Initial combat setup
+  // Initial combat setup: decide who strikes first.
   useEffect(() => {
+    mountedRef.current = true;
     const playerSpeed = player.Stats?.Speed || 0;
     const opponentSpeed = opponent.Stats?.Speed || 0;
-
     let firstAttackerId = 'player';
-    if (opponentSpeed > playerSpeed) {
-      firstAttackerId = 'opponent';
-    } else if (opponentSpeed === playerSpeed) {
-      firstAttackerId = randomInt(0, 1) === 0 ? 'player' : 'opponent';
-    }
+    if (opponentSpeed > playerSpeed) firstAttackerId = 'opponent';
+    else if (opponentSpeed === playerSpeed) firstAttackerId = randomInt(0, 1) === 0 ? 'player' : 'opponent';
 
+    setLogMessages([`⚔️ Combat begins! ${firstAttackerId === 'player' ? player.name : opponent.name} strikes first!`]);
+    [[player, 'player'], [opponent, 'opponent']].forEach(([character, side]) => {
+      if (flawPenalties(character, side).length) {
+        setLogMessages(prev => [...prev, `💀 ${character.name}'s ${character["Fatal Flaw"]} weakens them for this fight.`]);
+      }
+    });
     setCurrentAttackerId(firstAttackerId);
-    setIsPlayerTurn(firstAttackerId === 'player');
-    addLog(`⚔️ Combat begins! ${firstAttackerId === 'player' ? player.name : opponent.name} strikes first!`);
-
-    // Apply permanent combat effects from flaws
-    const playerFlawDetails = fatalFlaws.find(f => f.name === player["Fatal Flaw"]);
-    if (playerFlawDetails?.combatEffect?.statPenalty && playerFlawDetails.combatEffect.duration === -1) {
-        setPlayerBuffsDebuffs(prev => [...prev, { type: "statPenalty", ...playerFlawDetails.combatEffect.statPenalty, id: "flaw_perm_player" }]);
-        addLog(`💀 ${player.name}'s ${playerFlawDetails.name} flaw applies a stat penalty!`);
-    }
-    const opponentFlawDetails = fatalFlaws.find(f => f.name === opponent["Fatal Flaw"]);
-    if (opponentFlawDetails?.combatEffect?.statPenalty && opponentFlawDetails.combatEffect.duration === -1) {
-        setOpponentBuffsDebuffs(prev => [...prev, { type: "statPenalty", ...opponentFlawDetails.combatEffect.statPenalty, id: "flaw_perm_opponent" }]);
-        addLog(`💀 ${opponent.name}'s ${opponentFlawDetails.name} flaw applies a stat penalty!`);
-    }
-
-  }, [player, opponent, addLog, fatalFlaws]);
+    return () => { mountedRef.current = false; };
+  }, [player, opponent]);
 
   // Scroll combat log to bottom
   useEffect(() => {
@@ -156,209 +146,215 @@ const CombatArena = ({ player, opponent, onClose, onCombatEnd, activeQuest, upda
     }
   }, [logMessages]);
 
-  const handleTurn = useCallback(async (action, abilityName = null) => {
-    let currentAttackerChar = currentAttackerId === 'player' ? { ...player, activeBuffs: playerBuffsDebuffs } : { ...opponent, activeBuffs: opponentBuffsDebuffs };
-    let currentDefenderChar = currentAttackerId === 'player' ? { ...opponent, activeBuffs: opponentBuffsDebuffs } : { ...player, activeBuffs: playerBuffsDebuffs };
+  const endTurn = useCallback(() => {
+    if (!mountedRef.current) return;
+    setCombatTurn(prev => prev + 1);
+    setCurrentAttackerId(prev => (prev === 'player' ? 'opponent' : 'player'));
+    setShowAbilitySelection(false);
+    resolvingRef.current = false;
+    setIsResolving(false);
+  }, []);
 
-    const currentAttackerAbilityStates = currentAttackerId === 'player' ? { ...playerAbilityStates } : { ...opponentAbilityStates };
-    const setAttackerAbilityStates = currentAttackerId === 'player' ? setPlayerAbilityStates : setOpponentAbilityStates;
+  const handleTurn = useCallback(async (requestedAction, abilityName = null) => {
+    if (resolvingRef.current || combatOver || !currentAttackerId) return;
+    resolvingRef.current = true;
+    setIsResolving(true);
+    setShowAbilitySelection(false);
 
-    const setDefenderHP = currentAttackerId === 'player' ? setCurrentOpponentHP : setCurrentPlayerHP;
-    const currentDefenderHP = currentAttackerId === 'player' ? currentOpponentHP : currentPlayerHP;
+    let action = requestedAction;
+    const attackerIsPlayer = currentAttackerId === 'player';
+    const attackerBase = attackerIsPlayer ? player : opponent;
+    const defenderBase = attackerIsPlayer ? opponent : player;
+    const setAttackerBuffs = attackerIsPlayer ? setPlayerBuffsDebuffs : setOpponentBuffsDebuffs;
+    const setDefenderBuffs = attackerIsPlayer ? setOpponentBuffsDebuffs : setPlayerBuffsDebuffs;
+    const setAttackerAbilityStates = attackerIsPlayer ? setPlayerAbilityStates : setOpponentAbilityStates;
 
-    // Decrement cooldowns and buff/debuff durations
-    const nextAttackerBuffsDebuffs = currentAttackerChar.activeBuffs.filter(effect => {
-        if (effect.duration !== -1) {
-            effect.duration--;
-        }
-        return effect.duration !== 0;
-    });
-    currentAttackerId === 'player' ? setPlayerBuffsDebuffs(nextAttackerBuffsDebuffs) : setOpponentBuffsDebuffs(nextAttackerBuffsDebuffs);
-    currentAttackerChar.activeBuffs = nextAttackerBuffsDebuffs;
+    // Work on local copies so damage, healing and the victory check all see the same numbers.
+    let attackerHP = attackerIsPlayer ? currentPlayerHP : currentOpponentHP;
+    let defenderHP = attackerIsPlayer ? currentOpponentHP : currentPlayerHP;
+    const abilityStates = Object.fromEntries(
+      Object.entries(attackerIsPlayer ? playerAbilityStates : opponentAbilityStates).map(([k, v]) => [k, { ...v }])
+    );
 
-    const nextDefenderBuffsDebuffs = currentDefenderChar.activeBuffs.filter(effect => {
-      if (effect.duration !== -1) {
-          effect.duration--;
-      }
-      return effect.duration !== 0;
-    });
-    currentAttackerId === 'player' ? setOpponentBuffsDebuffs(nextDefenderBuffsDebuffs) : setPlayerBuffsDebuffs(nextDefenderBuffsDebuffs);
-    currentDefenderChar.activeBuffs = nextDefenderBuffsDebuffs;
+    // The attacker's own timed effects tick down at the start of their turn.
+    let attackerBuffs = (attackerIsPlayer ? playerBuffsDebuffs : opponentBuffsDebuffs)
+      .map(effect => (effect.duration === -1 ? effect : { ...effect, duration: effect.duration - 1 }))
+      .filter(effect => effect.duration !== 0);
+    let defenderBuffs = attackerIsPlayer ? opponentBuffsDebuffs : playerBuffsDebuffs;
 
-    addLog(`🎯 Turn ${combatTurn}: ${currentAttackerChar.name}'s turn`);
+    const attacker = () => ({ ...attackerBase, activeBuffs: attackerBuffs });
+    const defender = () => ({ ...defenderBase, activeBuffs: defenderBuffs });
 
-    // Apply Fatal Flaw effects
-    const attackerFlawDetails = fatalFlaws.find(f => f.name === currentAttackerChar["Fatal Flaw"]);
-    if (attackerFlawDetails?.combatEffect) {
-        if (attackerFlawDetails.combatEffect.selfDamageChance && Math.random() < attackerFlawDetails.combatEffect.selfDamageChance) {
-            const damage = attackerFlawDetails.combatEffect.selfDamageAmount;
-            if (currentAttackerId === 'player') {
-              setCurrentPlayerHP(prevHP => Math.max(0, prevHP - damage));
-            } else {
-              setCurrentOpponentHP(prevHP => Math.max(0, prevHP - damage));
-            }
-            addLog(`💀 ${currentAttackerChar.name}'s ${attackerFlawDetails.name} caused ${damage} self-damage!`);
-        }
-        if (attackerFlawDetails.combatEffect.forcedAttackChance && Math.random() < attackerFlawDetails.combatEffect.forcedAttackChance) {
-            action = 'attack';
-            addLog(`😤 ${currentAttackerChar.name}'s ${attackerFlawDetails.name} forced an attack!`);
-        }
-        if (attackerFlawDetails.combatEffect.abilityFailChance && action === 'ability' && Math.random() < attackerFlawDetails.combatEffect.abilityFailChance) {
-            addLog(`❌ ${currentAttackerChar.name}'s ${attackerFlawDetails.name} caused the ability to fail!`);
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            setCombatTurn(prev => prev + 1);
-            setCurrentAttackerId(prev => prev === 'player' ? 'opponent' : 'player');
-            setIsPlayerTurn(prev => !prev);
-            setShowAbilitySelection(false);
-            return;
-        }
+    addLog(`🎯 Turn ${combatTurn}: ${attackerBase.name}'s move`);
+
+    const stun = attackerBuffs.find(effect => effect.type === 'stunned');
+    if (stun) {
+      addLog(`⏸️ ${attackerBase.name} is frozen in time and loses the turn!`);
+      action = 'skip';
     }
 
-    // Process action
+    const flaw = fatalFlaws.find(f => f.name === attackerBase["Fatal Flaw"])?.combatEffect;
+    if (flaw && action !== 'skip') {
+      if (flaw.selfDamageChance && Math.random() < flaw.selfDamageChance) {
+        attackerHP = Math.max(0, attackerHP - flaw.selfDamageAmount);
+        addLog(`💀 ${attackerBase.name}'s ${attackerBase["Fatal Flaw"]} causes ${flaw.selfDamageAmount} self-damage!`);
+      }
+      if (flaw.forcedAttackChance && action !== 'attack' && Math.random() < flaw.forcedAttackChance) {
+        action = 'attack';
+        addLog(`😤 ${attackerBase.name}'s ${attackerBase["Fatal Flaw"]} forces a reckless attack!`);
+      }
+      if (flaw.abilityFailChance && action === 'ability' && Math.random() < flaw.abilityFailChance) {
+        addLog(`❌ ${attackerBase.name}'s ${attackerBase["Fatal Flaw"]} makes the ability fizzle!`);
+        action = 'skip';
+      }
+    }
+
     const chosenAbility = abilityName ? specialAbilities.find(ab => ab.name === abilityName) : null;
+    let usedAbilityName = null;
 
     if (action === 'ability' && chosenAbility) {
-      const abilState = currentAttackerAbilityStates[chosenAbility.name];
-      if (abilState && (abilState.cooldown > 0 || (abilState.usesLeft !== -1 && abilState.usesLeft === 0))) {
-          addLog(`⏳ ${currentAttackerChar.name}'s ${chosenAbility.name} is not ready!`);
+      const state = abilityStates[chosenAbility.name];
+      if (!isAbilityReady(state)) {
+        addLog(`⏳ ${chosenAbility.name} is not ready yet.`);
       } else {
-          addLog(`✨ ${currentAttackerChar.name} uses ${chosenAbility.name}!`);
-          if (chosenAbility.type === "healing") {
-            const healingAmount = Math.abs(chosenAbility.power);
-            const targetHPSetter = currentAttackerId === 'player' ? setCurrentPlayerHP : setCurrentOpponentHP;
-            const targetCurrentHP = currentAttackerId === 'player' ? currentPlayerHP : currentOpponentHP;
-            targetHPSetter(Math.min(currentAttackerChar.maxHP, targetCurrentHP + healingAmount));
-            addLog(`💚 ${currentAttackerChar.name} heals for ${healingAmount} HP!`);
-          } else if (chosenAbility.type === "magical" || chosenAbility.type === "physical") {
-              const damage = (chosenAbility.type === "magical" ? calculateMagicalDamage : calculatePhysicalDamage)(currentAttackerChar, currentDefenderChar, chosenAbility, chosenAbility.element || null);
-              setDefenderHP(prevHP => Math.max(0, prevHP - damage));
-              addLog(`💥 ${currentAttackerChar.name} deals ${damage} damage to ${currentDefenderChar.name}!`);
-          } else if (chosenAbility.type === "utility" || chosenAbility.type === "defensive") {
-              if (chosenAbility.effect?.skipOpponentTurns) {
-                  addLog(`⏸️ ${currentDefenderChar.name}'s next ${chosenAbility.effect.skipOpponentTurns} turns are skipped!`);
-              }
-              if (chosenAbility.effect?.tempStrBoost) {
-                  addLog(`💪 ${currentAttackerChar.name} gains ${chosenAbility.effect.tempStrBoost} Strength for ${chosenAbility.effect.duration} turns!`);
-                  setAttackerBuffsDebuffs(prev => [...prev, { type: "statBoost", stat: "Strength", value: chosenAbility.effect.tempStrBoost, duration: chosenAbility.effect.duration }]);
-              }
-              if (chosenAbility.effect?.damageReduction) {
-                  addLog(`🛡️ ${currentAttackerChar.name} gains ${chosenAbility.effect.damageReduction * 100}% damage reduction!`);
-                  setAttackerBuffsDebuffs(prev => [...prev, { type: "damageReduction", value: chosenAbility.effect.damageReduction, duration: chosenAbility.effect.duration }]);
-              }
-              if (chosenAbility.effect?.highDodgeChance) {
-                  addLog(`💨 ${currentAttackerChar.name} gains increased dodge chance!`);
-                  setAttackerBuffsDebuffs(prev => [...prev, { type: "dodgeBoost", value: chosenAbility.effect.highDodgeChance, duration: chosenAbility.effect.duration }]);
-              }
-              if (chosenAbility.effect?.revive) {
-                addLog(`🔥 ${currentAttackerChar.name} will revive with ${chosenAbility.effect.hpRestore * 100}% HP upon defeat!`);
-                setAttackerBuffsDebuffs(prev => [...prev, { type: "revive", value: chosenAbility.effect.hpRestore, duration: 1 }]);
-              }
-          }
+        addLog(`✨ ${attackerBase.name} uses ${chosenAbility.name}!`);
+        const effect = chosenAbility.effect || {};
 
-          if (abilState) {
-            abilState.cooldown = chosenAbility.cooldown;
-            if (chosenAbility.usesPerMatch !== -1) {
-              abilState.usesLeft--;
-            }
-            setAttackerAbilityStates({ ...currentAttackerAbilityStates });
-          }
+        if (effect.selfDamage) {
+          attackerHP = Math.max(0, attackerHP - effect.selfDamage);
+          addLog(`🩸 ${attackerBase.name} pays ${effect.selfDamage} HP for power.`);
+        }
+        if (effect.tempStrBoost) {
+          attackerBuffs = [...attackerBuffs, { type: "statBoost", stat: "Strength", value: effect.tempStrBoost, duration: effect.duration + 1 }];
+          addLog(`💪 ${attackerBase.name} gains ${effect.tempStrBoost} Strength for ${effect.duration} turns!`);
+        }
+        if (effect.damageReduction) {
+          attackerBuffs = [...attackerBuffs, { type: "damageReduction", value: effect.damageReduction, duration: effect.duration }];
+          addLog(`🛡️ ${attackerBase.name} raises a shield (${effect.damageReduction * 100}% damage reduction).`);
+        }
+        if (effect.highDodgeChance) {
+          attackerBuffs = [...attackerBuffs, { type: "dodgeBoost", value: effect.highDodgeChance, duration: effect.duration }];
+          addLog(`💨 ${attackerBase.name} becomes very hard to hit!`);
+        }
+        if (effect.revive) {
+          attackerBuffs = [...attackerBuffs, { type: "revive", value: effect.hpRestore, duration: -1 }];
+          addLog(`🔥 ${attackerBase.name} will rise again with ${effect.hpRestore * 100}% HP if defeated.`);
+        }
+        if (effect.skipOpponentTurns) {
+          defenderBuffs = [...defenderBuffs, { type: "stunned", duration: effect.skipOpponentTurns + 1 }];
+          addLog(`⏸️ ${defenderBase.name} loses the next ${effect.skipOpponentTurns} turns!`);
+        }
+
+        if (chosenAbility.type === "healing" && chosenAbility.power < 0) {
+          const healed = Math.min(attackerBase.maxHP, attackerHP + Math.abs(chosenAbility.power)) - attackerHP;
+          attackerHP += healed;
+          addLog(`💚 ${attackerBase.name} heals ${healed} HP.`);
+        } else if (chosenAbility.type === "magical" || (chosenAbility.type === "physical" && chosenAbility.power > 0)) {
+          let damage = chosenAbility.type === "magical"
+            ? calculateMagicalDamage(attacker(), defender(), chosenAbility)
+            : calculatePhysicalDamage(attacker(), defender(), chosenAbility);
+          if (effect.damageBoost) damage = Math.round(damage * effect.damageBoost);
+          defenderHP = Math.max(0, defenderHP - damage);
+          addLog(`💥 ${chosenAbility.name} deals ${damage} damage to ${defenderBase.name}!`);
+        } else if (!Object.keys(effect).length) {
+          addLog(`🌀 ${attackerBase.name} repositions, looking for an opening.`);
+        }
+
+        usedAbilityName = chosenAbility.name;
+        if (state) {
+          state.cooldown = chosenAbility.cooldown;
+          if (state.usesLeft > 0) state.usesLeft -= 1;
+        }
       }
     } else if (action === 'attack') {
-      const damage = calculatePhysicalDamage(currentAttackerChar, currentDefenderChar, currentAttackerChar.weaponDetails?.type || null);
-      const dodgeChance = getDodgeChance(currentAttackerChar.Stats, currentDefenderChar.Stats, { name: currentAttackerChar["Weapon Type"], mastery: currentAttackerChar["Weapon Mastery"] });
-      const dodged = randomInt(1, 100) <= dodgeChance;
-
-      if (dodged) {
-        addLog(`💨 ${currentDefenderChar.name} dodged the attack!`);
+      const dodgeChance = getDodgeChance(attacker(), defender());
+      if (randomInt(1, 100) <= dodgeChance) {
+        addLog(`💨 ${defenderBase.name} dodges the attack!`);
       } else {
-        setDefenderHP(prevHP => Math.max(0, prevHP - damage));
-        addLog(`⚔️ ${currentAttackerChar.name} attacks ${currentDefenderChar.name} for ${damage} damage!`);
+        const damage = calculatePhysicalDamage(attacker(), defender());
+        defenderHP = Math.max(0, defenderHP - damage);
+        addLog(`⚔️ ${attackerBase.name} hits ${defenderBase.name} for ${damage} damage!`);
       }
     } else if (action === 'defend') {
-      addLog(`🛡️ ${currentAttackerChar.name} takes a defensive stance!`);
-      setAttackerBuffsDebuffs(prev => [...prev, { type: "defending", duration: 1 }]);
+      attackerBuffs = [...attackerBuffs, { type: "defending", duration: 1 }];
+      addLog(`🛡️ ${attackerBase.name} takes a defensive stance.`);
     }
 
-    const latestPlayerHP = currentAttackerId === 'player' ? currentPlayerHP : currentOpponentHP;
-    const latestOpponentHP = currentAttackerId === 'player' ? currentOpponentHP : currentPlayerHP;
+    // Cooldowns recover at the end of each of the attacker's turns (not on the turn the ability was used).
+    Object.entries(abilityStates).forEach(([name, state]) => {
+      if (name !== usedAbilityName && state.cooldown > 0) state.cooldown -= 1;
+    });
 
-    if (latestPlayerHP <= 0 || latestOpponentHP <= 0) {
-        const winner = latestPlayerHP <= 0 ? 'opponent' : 'player';
-        const defeatedChar = winner === 'opponent' ? player : opponent;
-        const defeatedCharSetHP = winner === 'opponent' ? setCurrentPlayerHP : setCurrentOpponentHP;
-        const defeatedCharBuffs = winner === 'opponent' ? playerBuffsDebuffs : opponentBuffsDebuffs;
-        const setDefeatedCharBuffs = winner === 'opponent' ? setPlayerBuffsDebuffs : setOpponentBuffsDebuffs;
+    // A revive effect saves a defeated fighter once.
+    const tryRevive = (buffs, character, hp) => {
+      if (hp > 0) return { buffs, hp };
+      const revive = buffs.find(b => b.type === 'revive');
+      if (!revive) return { buffs, hp };
+      addLog(`🔥 ${character.name} rises from the ashes!`);
+      return { buffs: buffs.filter(b => b !== revive), hp: Math.round(character.maxHP * revive.value) };
+    };
+    ({ buffs: attackerBuffs, hp: attackerHP } = tryRevive(attackerBuffs, attackerBase, attackerHP));
+    ({ buffs: defenderBuffs, hp: defenderHP } = tryRevive(defenderBuffs, defenderBase, defenderHP));
 
-        const reviveBuffIndex = defeatedCharBuffs.findIndex(b => b.type === "revive");
-        if (reviveBuffIndex !== -1) {
-            addLog(`🔥 ${defeatedChar.name} uses Phoenix Rebirth to revive!`);
-            const reviveHP = Math.round(defeatedChar.maxHP * defeatedCharBuffs[reviveBuffIndex].value);
-            defeatedCharSetHP(reviveHP);
-            const updatedBuffs = [...defeatedCharBuffs];
-            updatedBuffs.splice(reviveBuffIndex, 1);
-            setDefeatedCharBuffs(updatedBuffs);
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            setCombatTurn(prev => prev + 1);
-            setCurrentAttackerId(prev => prev === 'player' ? 'opponent' : 'player');
-            setIsPlayerTurn(prev => !prev);
-            setShowAbilitySelection(false);
-            return;
-        }
+    setAttackerBuffs(attackerBuffs);
+    setDefenderBuffs(defenderBuffs);
+    setAttackerAbilityStates(abilityStates);
+    const playerHP = attackerIsPlayer ? attackerHP : defenderHP;
+    const opponentHP = attackerIsPlayer ? defenderHP : attackerHP;
+    setCurrentPlayerHP(playerHP);
+    setCurrentOpponentHP(opponentHP);
 
-        addLog(`🏁 Combat ended! ${winner === 'player' ? player.name : opponent.name} is victorious!`);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        onCombatEnd(winner, winner === 'player' ? player : opponent);
-        return;
+    if (playerHP <= 0 || opponentHP <= 0) {
+      const winner = playerHP <= 0 ? 'opponent' : 'player';
+      setCombatOver(true);
+      addLog(`🏁 ${winner === 'player' ? player.name : opponent.name} is victorious!`);
+      await wait(TURN_DELAY_MS);
+      if (mountedRef.current) onCombatEnd(winner, opponent);
+      return;
     }
 
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setCombatTurn(prev => prev + 1);
-    setCurrentAttackerId(prev => prev === 'player' ? 'opponent' : 'player');
-    setIsPlayerTurn(prev => !prev);
-    setShowAbilitySelection(false);
-  }, [player, opponent, currentAttackerId, combatTurn, addLog, calculatePhysicalDamage, calculateMagicalDamage, getDodgeChance, currentPlayerHP, currentOpponentHP, specialAbilities, fatalFlaws,
-      playerAbilityStates, opponentAbilityStates, playerBuffsDebuffs, opponentBuffsDebuffs, setCurrentPlayerHP, setCurrentOpponentHP, onCombatEnd, getEffectiveStats, weaponTypes]);
+    await wait(TURN_DELAY_MS);
+    endTurn();
+  }, [player, opponent, currentAttackerId, combatTurn, combatOver, currentPlayerHP, currentOpponentHP,
+      playerAbilityStates, opponentAbilityStates, playerBuffsDebuffs, opponentBuffsDebuffs,
+      addLog, calculatePhysicalDamage, calculateMagicalDamage, getDodgeChance, onCombatEnd, endTurn]);
 
-  // AI's Turn Logic
+  // Opponent AI: exactly one decision per opponent turn.
   useEffect(() => {
-    if (currentAttackerId === 'opponent' && currentPlayerHP > 0 && currentOpponentHP > 0) {
-      const opponentChar = opponent;
+    if (currentAttackerId !== 'opponent' || combatOver || resolvingRef.current) return;
+    if (aiTurnScheduledRef.current === combatTurn) return;
+    aiTurnScheduledRef.current = combatTurn;
 
-      let aiAction = 'attack';
+    const ability = specialAbilities.find(sa => sa.name === opponent["Special Ability"]);
+    const abilityState = ability ? opponentAbilityStates[ability.name] : null;
+    const hpRatio = currentOpponentHP / opponent.maxHP;
+    const playerHpRatio = currentPlayerHP / player.maxHP;
 
-      const opponentAbilState = opponentAbilityStates[opponentChar.abilityDetails?.name];
-      const canUseAbility = opponentChar.abilityDetails && opponentChar.abilityDetails.name !== "None" && combatTurn > 1 &&
-                            (!opponentAbilState || (opponentAbilState.cooldown === 0 && (opponentAbilState.usesLeft > 0 || opponentChar.abilityDetails.usesPerMatch === -1)));
-
-      if (canUseAbility) {
-        if (opponentChar.abilityDetails.type === "healing" && currentOpponentHP / opponent.maxHP < 0.5) {
-          aiAction = 'ability';
-        } else if (opponentChar.abilityDetails.type === "magical" || opponentChar.abilityDetails.type === "physical") {
-          if (currentOpponentHP / opponent.maxHP > 0.7 && currentPlayerHP / player.maxHP < 0.3) {
-            aiAction = 'ability';
-          }
-        } else if (opponentChar.abilityDetails.type === "defensive") {
-            if (currentOpponentHP / opponent.maxHP < 0.6 && !opponentBuffsDebuffs.some(b => b.type === "defending")) {
-                aiAction = 'ability';
-            }
-        } else if (opponentChar.abilityDetails.type === "utility" && opponentChar.abilityDetails.name === "Time Stop") {
-            if (combatTurn < 5 && opponentAbilState.usesLeft > 0) {
-                aiAction = 'ability';
-            }
-        }
-      } else if (currentOpponentHP / opponent.maxHP < 0.4 && randomInt(0, 1) === 0) {
-        aiAction = 'defend';
+    let aiAction = 'attack';
+    if (ability && combatTurn > 1 && isAbilityReady(abilityState)) {
+      if (ability.type === 'healing') {
+        if (hpRatio < 0.5) aiAction = 'ability';
+      } else if (ability.type === 'defensive') {
+        if (hpRatio < 0.6) aiAction = 'ability';
+      } else if (ability.type === 'magical' || ability.power > 0) {
+        if (playerHpRatio > 0.3 || randomInt(0, 1) === 0) aiAction = 'ability';
+      } else if (randomInt(0, 2) === 0) {
+        aiAction = 'ability';
       }
-
-      setTimeout(() => handleTurn(aiAction, aiAction === 'ability' ? opponentChar.abilityDetails.name : null), 1500);
     }
-  }, [isPlayerTurn, currentAttackerId, currentPlayerHP, currentOpponentHP, handleTurn, opponent, player, combatTurn, opponentAbilityStates, opponentBuffsDebuffs]);
+    if (aiAction === 'attack' && hpRatio < 0.4 && randomInt(0, 2) === 0) {
+      aiAction = 'defend';
+    }
+
+    // Not cleared on re-render: the turn guard above already prevents a second decision.
+    setTimeout(() => handleTurn(aiAction, aiAction === 'ability' ? ability.name : null), TURN_DELAY_MS);
+  }, [currentAttackerId, combatTurn, combatOver, handleTurn, opponent, player, currentOpponentHP, currentPlayerHP, opponentAbilityStates]);
 
   const playerHPPercent = (currentPlayerHP / player.maxHP) * 100;
   const opponentHPPercent = (currentOpponentHP / opponent.maxHP) * 100;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-95 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4">
       <div className="bg-gradient-to-br from-fantasy-dark via-gray-900 to-fantasy-dark rounded-2xl shadow-2xl p-6 border-2 border-mystical-ruby w-full max-w-6xl h-5/6 flex flex-col backdrop-blur-sm">
         
         {/* Header */}
@@ -449,7 +445,7 @@ const CombatArena = ({ player, opponent, onClose, onCombatEnd, activeQuest, upda
         </div>
 
         {/* Player Actions */}
-        {isPlayerTurn && currentPlayerHP > 0 && currentOpponentHP > 0 && (
+        {isPlayerTurn && !isResolving && !combatOver && (
           <div className="mt-6 bg-gradient-to-r from-mystical-gold/20 to-mystical-silver/20 rounded-xl p-6 border border-mystical-gold/50">
             <h3 className="text-2xl font-bold text-mystical-gold mb-4 text-center font-fantasy">Choose Your Action</h3>
             <div className="flex justify-center gap-4 flex-wrap">
@@ -495,7 +491,7 @@ const CombatArena = ({ player, opponent, onClose, onCombatEnd, activeQuest, upda
 
         {/* Ability Selection Modal */}
         {showAbilitySelection && (
-          <div className="absolute inset-0 bg-black bg-opacity-90 flex items-center justify-center p-4 rounded-2xl">
+          <div className="absolute inset-0 bg-black/90 flex items-center justify-center p-4 rounded-2xl">
             <div className="bg-gradient-to-br from-fantasy-dark to-gray-900 rounded-xl shadow-2xl p-6 border-2 border-mystical-purple w-full max-w-lg">
               <h3 className="text-3xl font-bold text-mystical-gold text-center mb-6 font-fantasy">Choose Your Power</h3>
               <div className="space-y-3 max-h-60 overflow-y-auto pr-2">

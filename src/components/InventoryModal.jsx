@@ -5,7 +5,7 @@ const InventoryModal = ({ showInventoryModal, character, onClose }) => {
   if (!showInventoryModal) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50 p-4">
       <div className="bg-gray-800 rounded-xl shadow-2xl p-6 border-2 border-purple-700 w-full max-w-2xl h-3/4 flex flex-col">
         <h2 className="text-3xl font-bold text-yellow-300 text-center mb-6 font-serif">Your Inventory</h2>
         <div className="flex-grow overflow-y-auto bg-gray-900 rounded-md p-4 border border-gray-700">

@@ -2,11 +2,11 @@
 import React from 'react';
 import { Target } from 'lucide-react';
 
-const QuestsModal = ({ showQuestsModal, activeQuest, availableQuests, onClose, acceptQuest, abandonQuest }) => {
+const QuestsModal = ({ showQuestsModal, activeQuest, availableQuests, onClose, acceptQuest, abandonQuest, onStartBattle }) => {
   if (!showQuestsModal) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50 p-4">
       <div className="bg-gray-800 rounded-xl shadow-2xl p-6 border-2 border-purple-700 w-full max-w-2xl h-3/4 flex flex-col">
         <h2 className="text-3xl font-bold text-yellow-300 text-center mb-6 font-serif">
           {activeQuest ? "Active Quest" : "Available Quests"}
@@ -24,6 +24,7 @@ const QuestsModal = ({ showQuestsModal, activeQuest, availableQuests, onClose, a
                   <p><strong className="text-purple-300">Min Rank:</strong> {activeQuest.rankRequired}</p>
                   <p className="text-yellow-300 font-bold">Rewards:
                     {activeQuest.rewards.xp && ` ${activeQuest.rewards.xp} XP`}
+                    {activeQuest.rewards.numItems && `, ${activeQuest.rewards.numItems} ${activeQuest.rewards.itemRarity || ""} item${activeQuest.rewards.numItems > 1 ? "s" : ""}`}
                     {activeQuest.rewards.gold && `, ${activeQuest.rewards.gold} Gold`}
                     {activeQuest.rewards.item && `, ${activeQuest.rewards.item.rarity} ${activeQuest.rewards.item.name || activeQuest.rewards.item.type} `}
                     {activeQuest.rewards.stat && `, +${activeQuest.rewards.value} ${activeQuest.rewards.stat}`}
@@ -37,28 +38,18 @@ const QuestsModal = ({ showQuestsModal, activeQuest, availableQuests, onClose, a
                   <p className="text-purple-300 font-bold">Tasks:</p>
                   {activeQuest.type === "Battle Quest" && (
                     <p className="text-gray-200">
-                      Win {activeQuest.progress.currentWins || 0}/{activeQuest.specifics.winsRequired} fights against {activeQuest.specifics.enemyType}.
+                      Win {activeQuest.currentProgress?.currentWins || 0}/{activeQuest.specifics.winsRequired} fights against {activeQuest.specifics.enemyType}.
                     </p>
                   )}
                   {/* Add other quest types' tasks here */}
+                  {activeQuest.type === "Battle Quest" && (
                   <button
-                    onClick={() => {
-                      // Custom modal for "Feature Coming Soon!"
-                      const modal = document.createElement('div');
-                      modal.className = 'fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4';
-                      modal.innerHTML = `
-                        <div class="bg-gray-800 rounded-xl shadow-2xl p-6 border-2 border-yellow-700 w-full max-w-sm text-center">
-                          <h3 class="text-2xl font-bold text-yellow-400 mb-4">Feature Coming Soon!</h3>
-                          <p class="text-lg text-gray-200">Starting quest battle: ${activeQuest.name}! (Feature to be implemented: target specific enemy types)</p>
-                          <button class="mt-6 px-6 py-3 bg-yellow-600 text-white text-lg font-bold rounded-lg shadow-md hover:bg-yellow-700 transition-colors duration-200" onclick="this.parentNode.parentNode.remove()">Okay</button>
-                        </div>
-                      `;
-                      document.body.appendChild(modal);
-                    }}
+                    onClick={onStartBattle}
                     className="mt-3 px-4 py-2 bg-blue-600 text-white text-md font-bold rounded-lg shadow-md hover:bg-blue-700 transition-colors"
                   >
-                    Go to Task
+                    Hunt {activeQuest.specifics.enemyType}
                   </button>
+                  )}
                 </div>
                 <button
                   onClick={abandonQuest}
@@ -82,6 +73,7 @@ const QuestsModal = ({ showQuestsModal, activeQuest, availableQuests, onClose, a
                       <p><strong className="text-purple-300">Min Rank:</strong> {quest.rankRequired}</p>
                       <p className="text-yellow-300 font-bold">Rewards:
                         {quest.rewards.xp && ` ${quest.rewards.xp} XP`}
+                        {quest.rewards.numItems && `, ${quest.rewards.numItems} ${quest.rewards.itemRarity || ""} item${quest.rewards.numItems > 1 ? "s" : ""}`}
                         {quest.rewards.gold && `, ${quest.rewards.gold} Gold`}
                         {quest.rewards.item && `, ${quest.rewards.item.rarity} ${quest.rewards.item.name || quest.rewards.item.type} `}
                         {quest.rewards.stat && `, +${quest.rewards.value} ${quest.rewards.stat}`}

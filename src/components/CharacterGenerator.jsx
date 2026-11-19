@@ -1,10 +1,7 @@
 import React, { useRef, useCallback } from 'react';
 import { ScrollText, Sparkles, Wand2, Crown } from 'lucide-react';
-import {
-  races, abilities, weaponYesNo, weaponTypes, weaponGrades, weaponMasteries,
-  specialAbilityYesNo, specialAbilities, fatalFlaws, statNames, steps
-} from '../gameData.js';
-import { randomInt, weightedRandom } from '../utils/helpers.js';
+import { statNames } from '../gameData.js';
+import { randomInt } from '../utils/helpers.js';
 
 const CharacterGenerator = ({
   characterName,
@@ -128,13 +125,13 @@ const CharacterGenerator = ({
       {/* Instruction Section */}
       <div className="text-center">
         <div className="flex items-center justify-center gap-4 mb-6">
-          <div className="w-12 h-12 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full flex items-center justify-center shadow-lg">
+          <div className="w-12 h-12 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full flex shrink-0 items-center justify-center shadow-lg">
             <ScrollText size={24} className="text-white" />
           </div>
           <p className="text-2xl lg:text-3xl text-amber-200 font-serif italic">
             {instruction}
           </p>
-          <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-purple-700 rounded-full flex items-center justify-center shadow-lg">
+          <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-purple-700 rounded-full flex shrink-0 items-center justify-center shadow-lg">
             <Wand2 size={24} className="text-white animate-pulse" />
           </div>
         </div>
@@ -149,14 +146,14 @@ const CharacterGenerator = ({
         <div className="relative z-10">
           {/* Decorative elements */}
           <div className="flex items-center justify-center gap-8 mb-8">
-            <div className="w-16 h-16 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full flex items-center justify-center shadow-xl">
+            <div className="w-16 h-16 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full flex shrink-0 items-center justify-center shadow-xl">
               <Sparkles size={32} className="text-white animate-spin-slow" />
             </div>
             <div className="text-center">
               <h3 className="text-3xl font-bold text-amber-400 font-fantasy mb-2">Wheel of Destiny</h3>
               <div className="w-24 h-1 bg-gradient-to-r from-transparent via-amber-400 to-transparent"></div>
             </div>
-            <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-purple-700 rounded-full flex items-center justify-center shadow-xl">
+            <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-purple-700 rounded-full flex shrink-0 items-center justify-center shadow-xl">
               <Crown size={32} className="text-white animate-pulse" />
             </div>
           </div>
@@ -199,11 +196,11 @@ const CharacterGenerator = ({
               </>
             ) : (
               <>
-                <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                <div className="w-10 h-10 bg-white/20 rounded-full flex shrink-0 items-center justify-center">
                   <Sparkles size={24} className="animate-pulse" />
                 </div>
                 Begin Your Legend
-                <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                <div className="w-10 h-10 bg-white/20 rounded-full flex shrink-0 items-center justify-center">
                   <Wand2 size={24} className="animate-pulse" style={{animationDelay: '0.5s'}} />
                 </div>
               </>

@@ -52,13 +52,13 @@ const CharacterSummary = ({ character }) => {
         {/* Character Header */}
         <div className="text-center mb-12">
           <div className="flex items-center justify-center gap-4 mb-6">
-            <div className="w-16 h-16 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full flex items-center justify-center shadow-xl">
+            <div className="w-16 h-16 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full flex shrink-0 items-center justify-center shadow-xl">
               <Crown size={32} className="text-white" />
             </div>
             <h3 className="text-4xl lg:text-5xl font-bold text-transparent bg-gradient-to-r from-amber-400 via-yellow-300 to-amber-400 bg-clip-text font-fantasy">
               {character.name || 'Unnamed Hero'}
             </h3>
-            <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-purple-700 rounded-full flex items-center justify-center shadow-xl">
+            <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-purple-700 rounded-full flex shrink-0 items-center justify-center shadow-xl">
               <Star size={32} className="text-white animate-pulse" />
             </div>
           </div>
@@ -87,7 +87,7 @@ const CharacterSummary = ({ character }) => {
             {/* Basic Info */}
             <div className="bg-gradient-to-br from-emerald-900/30 to-blue-900/30 rounded-2xl p-6 border border-emerald-400/30 backdrop-blur-sm">
               <h4 className="text-2xl font-bold text-emerald-400 mb-6 flex items-center gap-3 font-fantasy">
-                <div className="w-8 h-8 bg-emerald-400 rounded-full flex items-center justify-center">
+                <div className="w-8 h-8 bg-emerald-400 rounded-full flex shrink-0 items-center justify-center">
                   <Star size={16} className="text-white" />
                 </div>
                 Heritage & Abilities
@@ -111,7 +111,7 @@ const CharacterSummary = ({ character }) => {
             {/* Weapon Info */}
             <div className="bg-gradient-to-br from-red-900/30 to-orange-900/30 rounded-2xl p-6 border border-red-400/30 backdrop-blur-sm">
               <h4 className="text-2xl font-bold text-red-400 mb-6 flex items-center gap-3 font-fantasy">
-                <div className="w-8 h-8 bg-red-400 rounded-full flex items-center justify-center">
+                <div className="w-8 h-8 bg-red-400 rounded-full flex shrink-0 items-center justify-center">
                   <Sword size={16} className="text-white" />
                 </div>
                 Arsenal
@@ -145,7 +145,7 @@ const CharacterSummary = ({ character }) => {
             {/* Fatal Flaw */}
             <div className="bg-gradient-to-br from-red-900/40 to-purple-900/40 rounded-2xl p-6 border border-red-500/40 backdrop-blur-sm">
               <h4 className="text-2xl font-bold text-red-400 mb-6 flex items-center gap-3 font-fantasy">
-                <div className="w-8 h-8 bg-red-500 rounded-full flex items-center justify-center">
+                <div className="w-8 h-8 bg-red-500 rounded-full flex shrink-0 items-center justify-center">
                   <Skull size={16} className="text-white" />
                 </div>
                 Fatal Flaw
@@ -164,7 +164,7 @@ const CharacterSummary = ({ character }) => {
             {/* Stats */}
             <div className="bg-gradient-to-br from-blue-900/30 to-purple-900/30 rounded-2xl p-6 border border-blue-400/30 backdrop-blur-sm">
               <h4 className="text-2xl font-bold text-blue-400 mb-6 flex items-center gap-3 font-fantasy">
-                <div className="w-8 h-8 bg-blue-400 rounded-full flex items-center justify-center">
+                <div className="w-8 h-8 bg-blue-400 rounded-full flex shrink-0 items-center justify-center">
                   <Shield size={16} className="text-white" />
                 </div>
                 Attributes
@@ -190,7 +190,7 @@ const CharacterSummary = ({ character }) => {
             {/* Progression */}
             <div className="bg-gradient-to-br from-amber-900/30 to-yellow-900/30 rounded-2xl p-6 border border-amber-400/30 backdrop-blur-sm">
               <h4 className="text-2xl font-bold text-amber-400 mb-6 flex items-center gap-3 font-fantasy">
-                <div className="w-8 h-8 bg-amber-400 rounded-full flex items-center justify-center">
+                <div className="w-8 h-8 bg-amber-400 rounded-full flex shrink-0 items-center justify-center">
                   <TrendingUp size={16} className="text-white" />
                 </div>
                 Progression
@@ -214,7 +214,7 @@ const CharacterSummary = ({ character }) => {
                 {character.floatingStatPoints > 0 && (
                   <div className="bg-gradient-to-r from-amber-500/20 to-yellow-500/20 rounded-xl p-4 border border-amber-400/50">
                     <p className="text-amber-400 font-bold flex items-center gap-3 text-lg">
-                      <div className="w-6 h-6 bg-amber-400 rounded-full flex items-center justify-center">
+                      <div className="w-6 h-6 bg-amber-400 rounded-full flex shrink-0 items-center justify-center">
                         <Zap size={12} className="text-white" />
                       </div>
                       Floating Stat Points: {character.floatingStatPoints}
