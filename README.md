@@ -2,6 +2,8 @@
 
 A browser fantasy RPG built with React. Every character is rolled on a wheel of fate (race, powers, weapon and a fatal flaw), then fights AI opponents in turn-based combat to earn XP, loot and quest rewards.
 
+**[Play it in your browser →](https://chandramouleshwar-06.github.io/realm-of-legends/)**
+
 ![Character sheet](docs/screenshots/character.png)
 
 ## Gameplay
